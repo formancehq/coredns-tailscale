@@ -1,5 +1,32 @@
-example.com:53 {
-  tailscale example.com
-  log 
-  errors
+tailedcc0.ts.net:1053 {
+    tailscale tailedcc0.ts.net {
+        authkey {$TS_AUTHKEY}
+        hostname coredns-internal-devenv
+        tags tag:k8s
+    }
+    log
+    errors
+}
+
+.:1053 {
+    errors
+    health
+    ready
+    rewrite name regex .*\.nodes\.vcluster\.com kubernetes.default.svc.cluster.local
+    kubernetes cluster.local in-addr.arpa ip6.arpa {
+        pods insecure
+        fallthrough in-addr.arpa ip6.arpa
+    }
+    hosts /etc/NodeHosts {
+        ttl 60
+        reload 15s
+        fallthrough
+    }
+    prometheus :9153
+    forward . /etc/resolv.conf 8.8.8.8 {
+        policy sequential
+    }
+    cache 30
+    loop
+    loadbalance
 }

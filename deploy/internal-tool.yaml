@@ -1,0 +1,122 @@
+# =============================================================
+# internal-tool + Tailscale SOCKS5 sidecar
+# Deploys the Go CLI tool with a Tailscale userspace sidecar
+# for ad-hoc exec into remote clusters via SOCKS5 proxy.
+# =============================================================
+#
+# Usage:
+#   kubectl apply -f deploy/internal-tool.yaml
+#
+#   POD=$(kubectl -n tailscale get pod -l app=internal-tool -o jsonpath='{.items[0].metadata.name}')
+#   kubectl -n tailscale exec $POD -c app -- /app/internal-tool tailscale status
+#   kubectl -n tailscale exec $POD -c app -- /app/internal-tool kubeconfig \
+#     --server https://<cluster>-operator.tailedcc0.ts.net \
+#     --socks5 localhost:1055
+#
+
+# --- ServiceAccount ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: internal-tool
+  namespace: tailscale
+---
+# --- Role (secrets for Tailscale state) ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: internal-tool
+  namespace: tailscale
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: ["internal-tool-state"]
+  verbs: ["get", "update", "patch"]
+---
+# --- RoleBinding ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: internal-tool
+  namespace: tailscale
+subjects:
+- kind: ServiceAccount
+  name: internal-tool
+roleRef:
+  kind: Role
+  name: internal-tool
+  apiGroup: rbac.authorization.k8s.io
+---
+# --- Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: internal-tool
+  namespace: tailscale
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: internal-tool
+  template:
+    metadata:
+      labels:
+        app: internal-tool
+    spec:
+      serviceAccountName: internal-tool
+      containers:
+      # ---- Go CLI tool ----
+      - name: app
+        image: registry.v2.formance.dev/formancehq/internal-tool:latest
+        command: ["sleep", "infinity"]
+        volumeMounts:
+        - name: ts-sock
+          mountPath: /var/run/tailscale
+          readOnly: true
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+      # ---- Tailscale sidecar ----
+      - name: ts-sidecar
+        image: ghcr.io/tailscale/tailscale:latest
+        imagePullPolicy: Always
+        env:
+        - name: TS_AUTHKEY
+          valueFrom:
+            secretKeyRef:
+              name: operator-oauth
+              key: client_secret
+        - name: TS_KUBE_SECRET
+          value: "internal-tool-state"
+        - name: TS_HOSTNAME
+          value: "internal-tool"
+        - name: TS_USERSPACE
+          value: "true"
+        - name: TS_SOCKS5_SERVER
+          value: "0.0.0.0:1055"
+        - name: TS_ACCEPT_DNS
+          value: "true"
+        - name: TS_EXTRA_ARGS
+          value: "--advertise-tags=tag:k8s-operator"
+        volumeMounts:
+        - name: ts-sock
+          mountPath: /tmp
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+
+      volumes:
+      - name: ts-sock
+        emptyDir: {}

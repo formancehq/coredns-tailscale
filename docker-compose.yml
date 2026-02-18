@@ -1,0 +1,73 @@
+services:
+  coredns:
+    build: .
+    container_name: coredns-tailscale
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=local-coredns
+      - TS_USERSPACE=true
+      - TS_ACCEPT_DNS=true
+      - TS_EXTRA_ARGS="--advertise-tags=tag:k8s-operator"
+    volumes:
+      - ./Corefile:/Corefile
+      - ts-state:/var/lib/tailscale
+    ports:
+      - "1053:53/udp"
+      - "1053:53/tcp"
+    networks:
+      tsnet:
+        ipv4_address: 172.28.0.10
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo | nc -u -w1 127.0.0.1 53"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  proxy:
+    image: tailscale/tailscale:latest
+    container_name: ts-proxy
+    hostname: ts-proxy
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=ts-proxy-devenv
+      - TS_USERSPACE=true
+      - TS_ACCEPT_DNS=false
+      - TS_SOCKS5_SERVER=0.0.0.0:1055
+      - TS_EXTRA_ARGS=--advertise-tags=tag:k8s-operator
+    volumes:
+      - ts-proxy-state:/var/lib/tailscale
+      - ts-proxy-sock:/tmp
+      - ./resolv.proxy.conf:/etc/resolv.conf:ro
+    depends_on:
+      coredns:
+        condition: service_healthy
+    networks:
+      tsnet:
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile.tool
+    container_name: internal-tool
+    dns:
+      - 172.28.0.10
+    depends_on:
+      - proxy
+    volumes:
+      - ts-proxy-sock:/var/run/tailscale:ro
+    networks:
+      tsnet:
+    entrypoint: ["sleep", "infinity"]
+
+volumes:
+  ts-state:
+  ts-proxy-state:
+  ts-proxy-sock:
+
+networks:
+  tsnet:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
